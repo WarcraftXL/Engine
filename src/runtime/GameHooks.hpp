@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace wxl::runtime::game
 {
     /**
@@ -37,4 +39,20 @@ namespace wxl::runtime::game
      * OnAdtChunkBuild. The caller runs hook::EnableAll() once after every installer.
      */
     void Install();
+
+    /**
+     * @brief Calls the native (un-hooked) ItemDisplayInfo row-by-id lookup directly, bypassing the
+     *        OnItemDisplayLookup event entirely.
+     *
+     * db2::itemdisplayinfo::kLookup is live-detoured once Install() has run (see hkItemDisplayLookup
+     * in GameHooks.cpp), so any caller that still resolves and calls that address directly would
+     * recurse into its own OnItemDisplayLookup subscriber and see its own already-rewritten fields
+     * on the next lookup for the same id. Scripts that need the row's true native contents -- e.g.
+     * to decide what an override for a displayId should even contain -- must call this instead.
+     * Returns 0 before Install() has run (no trampoline captured yet).
+     * @param displayId  ItemDisplayInfo row id to look up.
+     * @param outBuf     destination buffer, db2::itemdisplayinfo::kRecordSize bytes.
+     * @return the native lookup's own return value (nonzero on success).
+     */
+    uint32_t ItemDisplayInfoLookupNative(uint32_t displayId, void* outBuf);
 }

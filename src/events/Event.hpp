@@ -59,6 +59,8 @@ namespace wxl::events
         OnItemSlotClear, // a character model equipment slot was cleared(ItemSlotClearArgs)
         OnWeaponVisualChange, // a unit's mainhand/offhand/ranged visible-item entry field was written
                               // (WeaponVisualChangeArgs)
+        OnItemDisplayLookup, // a native ItemDisplayInfo row lookup by id just succeeded
+                              // (ItemDisplayLookupArgs)
         OnWorldEnter,    // the world/map finished loading, in-world   (WorldEnterArgs)
         OnWorldLeave,    // the world/map is being torn down           (WorldLeaveArgs)
         OnBeforeHostLaunch, // the DLL is about to launch the asset host (HostLaunchArgs)
@@ -208,6 +210,18 @@ namespace wxl::events
      *        itemEntry is the new item entry ID now in that slot (0 = slot cleared).
      */
     struct WeaponVisualChangeArgs { void* unit; uint32_t slot; uint32_t itemEntry; };
+    /**
+     * @brief Args for OnItemDisplayLookup; fires after a native ItemDisplayInfo row-by-id lookup
+     *        (db2::itemdisplayinfo::kLookup) succeeds, for every caller of that lookup -- the
+     *        client's own model loader included, not just this module's own resolution calls (which
+     *        go through wxl::runtime::game::ItemDisplayInfoLookupNative() instead and never reach
+     *        here -- see that function's doc comment). displayId is the id that was looked up;
+     *        record points at the just-filled row buffer (db2::itemdisplayinfo::kRecordSize bytes,
+     *        field offsets are the kOff* constants in offsets/game/DB2.hpp). A subscriber may
+     *        overwrite fields in place -- e.g. swap a Model1/Model2 string pointer for a virtual
+     *        path -- before the lookup's original caller reads them.
+     */
+    struct ItemDisplayLookupArgs { uint32_t displayId; void* record; };
     /** @brief Args for OnM2PerFrameUpdate; renderCtx is the per-instance render context that the
      *         scene graph is updating — fires once per visible M2 instance per frame. */
     struct M2PerFrameUpdateArgs { void* renderCtx; };

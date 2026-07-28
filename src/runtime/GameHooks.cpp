@@ -28,6 +28,7 @@
 #include "offsets/engine/Gx.hpp"
 #include "offsets/engine/Sound.hpp"
 #include "offsets/game/ADT.hpp"
+#include "offsets/game/DB2.hpp"
 #include "offsets/game/Doodad.hpp"
 #include "offsets/game/M2.hpp"
 #include "offsets/game/Unit.hpp"
@@ -60,6 +61,7 @@ namespace
     namespace frame = wxl::offsets::engine::frame;
     namespace unit  = wxl::offsets::game::unit;
     namespace snd   = wxl::offsets::engine::sound;
+    namespace db2   = wxl::offsets::game::db2;
     namespace aprof = wxl::runtime::assetprof;
 
     m2::M2_InitFn              g_origM2Init            = nullptr;
@@ -94,6 +96,7 @@ namespace
     unit::UnitFieldSetWriteFn  g_origUnitFieldSetWrite = nullptr;
     snd::PlaySoundFn           g_origPlaySound    = nullptr;
     snd::PlaySoundKitFn        g_origPlaySoundKit = nullptr;
+    db2::itemdisplayinfo::LookupFn g_origItemDisplayLookup = nullptr;
     std::atomic<uint32_t>      g_sceneHitTestFaults{ 0 };
     std::atomic<uint32_t>      g_textureUpdateFaults{ 0 };
     std::atomic<uint32_t>      g_opaqueSortFaults{ 0 };
@@ -1366,6 +1369,33 @@ namespace
     }
 
     /**
+     * @brief Detours the ItemDisplayInfo row-by-id lookup, emitting OnItemDisplayLookup after a
+     *        successful native lookup so a subscriber can rewrite fields (e.g. Model1/Model2) in
+     *        place before the caller reads them.
+     *
+     * Fires for EVERY caller of this lookup, native model loading included -- that is the whole
+     * point (see the doc comment on OnItemDisplayLookup in Event.hpp). Scripts that need to read a
+     * row's true native fields for their own purposes must go through
+     * wxl::runtime::game::ItemDisplayInfoLookupNative() instead of calling this address, or they
+     * will recurse into their own subscriber -- see that function's doc comment in GameHooks.hpp.
+     * @param storageObject  ItemDisplayInfo storage object (db2::itemdisplayinfo::kStorageObject).
+     * @param edxArg         second logical arg, unused by the native implementation.
+     * @param id             ItemDisplayInfo row id being looked up.
+     * @param outBuf         destination buffer, db2::itemdisplayinfo::kRecordSize bytes.
+     * @return the native lookup's own return value (nonzero on success).
+     */
+    uint32_t __fastcall hkItemDisplayLookup(void* storageObject, void* edxArg, uint32_t id, void* outBuf)
+    {
+        const uint32_t ok = g_origItemDisplayLookup(storageObject, edxArg, id, outBuf);
+        if (ok)
+        {
+            ev::ItemDisplayLookupArgs a{ id, outBuf };
+            ev::Emit(ev::Event::OnItemDisplayLookup, &a);
+        }
+        return ok;
+    }
+
+    /**
      * @brief Maps a raw update-field index to a weapon slot (0=mainhand, 1=offhand, 2=ranged).
      * @param fieldIndex  the edx value seen at kUnitFieldSetWrite.
      * @param slotOut     receives the mapped slot on a match.
@@ -1654,6 +1684,9 @@ namespace wxl::runtime::game
         wxl::core::hook::Install("CharModelSlotClear", m2::kCharModelSlotClear,
                                  reinterpret_cast<void*>(&hkSlotClear),
                                  reinterpret_cast<void**>(&g_origSlotClear));
+        wxl::core::hook::Install("ItemDisplayInfoLookup", db2::itemdisplayinfo::kLookup,
+                                 reinterpret_cast<void*>(&hkItemDisplayLookup),
+                                 reinterpret_cast<void**>(&g_origItemDisplayLookup));
         // Raw instruction hook, not a function boundary -- see the comment on kUnitFieldSetWrite in
         // offsets/game/Unit.hpp. Uses the untyped Install() overload deliberately: hkUnitFieldSetWrite
         // is a naked register-capture stub, not a real C function, so it has no meaningful C++ type to
@@ -1679,6 +1712,13 @@ namespace wxl::runtime::game
             wxl::core::mem::Patch(reinterpret_cast<void*>(adt::kLiquidRowFlagTest), guard, sizeof guard);
         }
 
-        WLOG_INFO("game: hooks installed (M2BufferAlloc, M2BufferFree, M2Init, M2FinalizeSkin, M2SetupBatchAlpha, M2SortOpaqueGeoBatches, M2RenderBatchShadowMap, DoodadSpawn, TextureUpdate, TextureCreate, ChunkBuild, WmoRootComplete, WmoGroupParse, CWorldEnter, FramePump, ObjectUpdate, ObjectDestroy, TargetSet, PlaySound, PlaySoundKit, CharModelSlotDispatch, CharModelSlotClear, M2PerFrameUpdate, M2BuildBonePalette)");
+        WLOG_INFO("game: hooks installed (M2BufferAlloc, M2BufferFree, M2Init, M2FinalizeSkin, M2SetupBatchAlpha, M2SortOpaqueGeoBatches, M2RenderBatchShadowMap, DoodadSpawn, TextureUpdate, TextureCreate, ChunkBuild, WmoRootComplete, WmoGroupParse, CWorldEnter, FramePump, ObjectUpdate, ObjectDestroy, TargetSet, PlaySound, PlaySoundKit, CharModelSlotDispatch, CharModelSlotClear, M2PerFrameUpdate, M2BuildBonePalette, ItemDisplayInfoLookup)");
+    }
+
+    uint32_t ItemDisplayInfoLookupNative(uint32_t displayId, void* outBuf)
+    {
+        if (!g_origItemDisplayLookup) return 0;
+        return g_origItemDisplayLookup(reinterpret_cast<void*>(db2::itemdisplayinfo::kStorageObject),
+                                        nullptr, displayId, outBuf);
     }
 }
