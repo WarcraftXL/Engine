@@ -49,6 +49,9 @@ namespace wxl::gpu
     /** @brief Drains the D3D12 debug layer's stored validation messages to the log, a no-op if absent. */
     void DrainDebug();
 
+    /** @brief Logs the DRED post-mortem after a device removal (no-op without WXL_DRED=1). */
+    void DumpDred();
+
     /**
      * @brief Writes a formatted line to the shared diagnostic log for the d3d9 proxy.
      * @param fmt  printf-style format string followed by its arguments.

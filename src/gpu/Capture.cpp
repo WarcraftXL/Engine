@@ -174,6 +174,19 @@ namespace
             // backbuffer whose underlying resource was managed by our queue and can crash inside d3d9on12.
             // Keep DWM's last completed frame and retry on the next engine Present instead.
             ++g_customPresentMisses;
+
+            // Graceful degrade: a REMOVED D3D12 device can never composite again, so an S_OK here
+            // would freeze the picture forever while the game keeps running underneath (observed:
+            // 19k+ suppressed presents). Report DEVICELOST so the engine enters its own lost-device
+            // loop (TestCooperativeLevel -> Reset) - the recovery path - instead of a frozen frame.
+            if (wxl::gpu::present::DeviceRemoved())
+            {
+                if (g_customPresentMisses <= 4 || (g_customPresentMisses % 600) == 0)
+                    Log("capture: composition device removed; reporting DEVICELOST to the engine (miss %u)",
+                        g_customPresentMisses);
+                return D3DERR_DEVICELOST;
+            }
+
             if (g_customPresentMisses <= 4 || (g_customPresentMisses % 600) == 0)
                 Log("capture: custom present miss %u; native windowed Present suppressed", g_customPresentMisses);
             return S_OK;

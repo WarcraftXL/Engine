@@ -26,12 +26,17 @@
 #include <d3dcompiler.h>
 
 #include <atomic>
+#include <cwchar>
 
 namespace
 {
     using wxl::gpu::Log;
 
     std::atomic<bool> g_resetRequired{ false };
+    // Latched when the shared D3D12 device reports removed. The composition can never succeed
+    // again on this device, so Present() bails fast and the capture hook reports DEVICELOST to
+    // the engine (native recovery) instead of suppressing its present under a frozen frame.
+    std::atomic<bool> g_deviceRemoved{ false };
 
     // The engine backbuffer is X8R8G8B8 (DXGI B8G8R8X8_UNORM), which flip/composition swapchains reject, so
     // the swapchain is B8G8R8A8 and a shader blit bridges the two formats (a plain copy between the two
@@ -165,12 +170,16 @@ namespace
         qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
         HRESULT hr = dev->CreateCommandQueue(&qd, IID_PPV_ARGS(&g_queue));
         if (FAILED(hr)) { Log("present: CreateCommandQueue failed hr=0x%08lX", (unsigned long)hr); return false; }
+        g_queue->SetName(L"wxl-present-queue");   // identifies our objects in a DRED breadcrumb dump
         for (UINT i = 0; i < kFrameRing; ++i)
         {
             hr = dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&g_alloc[i]));
             if (FAILED(hr)) { Log("present: CreateCommandAllocator[%u] failed hr=0x%08lX", i, (unsigned long)hr); return false; }
             hr = dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, g_alloc[i], nullptr, IID_PPV_ARGS(&g_list[i]));
             if (FAILED(hr)) { Log("present: CreateCommandList[%u] failed hr=0x%08lX", i, (unsigned long)hr); return false; }
+            wchar_t name[32];
+            swprintf_s(name, L"wxl-present-blit-%u", i);
+            g_list[i]->SetName(name);
             g_list[i]->Close();
         }
         hr = dev->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&g_fence));
@@ -231,6 +240,85 @@ namespace
         return true;
     }
 
+    /**
+     * @brief Replaces the shared fence event after an abandoned SetEventOnCompletion registration.
+     *
+     * A timed-out registration cannot be cancelled; when the GPU eventually reaches the value it
+     * signals the event with no waiter, latching the auto-reset event. A latched stale signal lets
+     * a LATER wait return one fence early — allocators are then Reset while their lists still
+     * execute, which is exactly the "badly formed commands" DEVICE_HUNG class. The kernel wait
+     * packet holds its own reference to the old handle, so closing ours is safe; the late signal
+     * lands on the retired handle, never on the fresh one.
+     */
+    void RetireEvent()
+    {
+        if (g_event) CloseHandle(g_event);
+        g_event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+        if (!g_event) Log("present: RetireEvent CreateEvent failed win32=%lu", GetLastError());
+    }
+
+    /**
+     * @brief Waits until the shared fence reaches value (bounded), immune to stale event signals.
+     *
+     * Revalidates the fence's completed value on every wake, so a latched stale signal can never
+     * satisfy a wait early. On timeout or error the shared event is retired (see RetireEvent).
+     * @param value      fence value to wait for.
+     * @param timeoutMs  total wait budget.
+     * @return true when the fence reached value; false on timeout/error (stuck or removed GPU).
+     */
+    bool WaitFence(UINT64 value, DWORD timeoutMs)
+    {
+        if (!g_fence || !g_event) return false;
+        const DWORD start = GetTickCount();
+        while (g_fence->GetCompletedValue() < value)
+        {
+            const DWORD spent = GetTickCount() - start;   // unsigned math survives tick wrap
+            if (spent >= timeoutMs)                  { RetireEvent(); return false; }
+            if (FAILED(g_fence->SetEventOnCompletion(value, g_event))) return false;
+            if (WaitForSingleObject(g_event, timeoutMs - spent) != WAIT_OBJECT_0)
+            {
+                RetireEvent();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * @brief Fully drains the composition queue (bounded).
+     *
+     * Required before releasing or resizing swapchain buffers: up to kFrameRing blits may still be
+     * executing against them, and ResizeBuffers/Release while the GPU writes a buffer is an
+     * out-of-bounds write in the driver (device removal or a UMD access violation).
+     * @param timeoutMs  wait budget.
+     * @return true when the queue is idle.
+     */
+    bool DrainComposition(DWORD timeoutMs)
+    {
+        if (!g_queue || !g_fence) return true;   // nothing submitted yet
+        if (FAILED(g_queue->Signal(g_fence, ++g_fenceVal))) return false;
+        return WaitFence(g_fenceVal, timeoutMs);
+    }
+
+    /**
+     * @brief Latches g_deviceRemoved (and the reset latch) when the shared device reports removed.
+     * @return true when the device is removed.
+     */
+    bool NoteIfDeviceRemoved()
+    {
+        ID3D12Device* dev = wxl::gpu::Device();
+        const HRESULT reason = dev ? dev->GetDeviceRemovedReason() : S_OK;
+        if (SUCCEEDED(reason)) return false;
+        if (!g_deviceRemoved.exchange(true, std::memory_order_relaxed))
+        {
+            Log("present: D3D12 device REMOVED reason=0x%08lX - composition disabled, reporting "
+                "DEVICELOST to the engine for native recovery", (unsigned long)reason);
+            wxl::gpu::DumpDred();   // names the exact hanging command when WXL_DRED=1
+        }
+        g_resetRequired.store(true, std::memory_order_relaxed);
+        return true;
+    }
+
     void ReleaseMsaaResolve()
     {
         if (g_msaaResolve) { g_msaaResolve->Release(); g_msaaResolve = nullptr; }
@@ -249,6 +337,19 @@ namespace
             Log("present: MSAA resolve shape changed without reset (%ux%u/%d -> %ux%u/%d)",
                 g_resolveW, g_resolveH, (int)g_resolveFormat, width, height, (int)format);
             return false;
+        }
+
+        // Defense-in-depth (formats were audited spec-legal, incl. B8G8R8X8_UNORM): warn once if
+        // this driver surprisingly lacks resolve support for the backbuffer format, so a field
+        // report carries the answer instead of a bare driver fault.
+        static bool s_checkedResolveSupport = false;
+        if (!s_checkedResolveSupport)
+        {
+            s_checkedResolveSupport = true;
+            D3D12_FEATURE_DATA_FORMAT_SUPPORT fs = { format, D3D12_FORMAT_SUPPORT1_NONE, D3D12_FORMAT_SUPPORT2_NONE };
+            if (SUCCEEDED(dev->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &fs, sizeof(fs))) &&
+                !(fs.Support1 & D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RESOLVE))
+                Log("present: WARNING format %d lacks MULTISAMPLE_RESOLVE on this driver", (int)format);
         }
 
         D3D12_HEAP_PROPERTIES heap = {};
@@ -293,6 +394,15 @@ namespace
         // so tear the composition objects down and rebuild them on the new window (the dcomp device is reused).
         if (g_hwnd != hwnd)
         {
+            // Up to kFrameRing blits may still target these buffers; destroying them undrained is
+            // a GPU write into freed memory. On a failed drain keep the old objects and drop the
+            // frame (the device is stuck or removed; the recovery path owns it from here).
+            if (g_swap && !DrainComposition(1000))
+            {
+                NoteIfDeviceRemoved();
+                Log("present: swapchain teardown drain failed, deferring hwnd change");
+                return false;
+            }
             ReleaseSwapBuffers();
             if (g_swap)   { g_swap->Release();   g_swap = nullptr; }
             if (g_visual) { g_visual->Release(); g_visual = nullptr; }
@@ -303,6 +413,14 @@ namespace
 
         if (g_swap && (g_w != w || g_h != h))
         {
+            // Same rule for a resize: ResizeBuffers demands every reference released AND the GPU
+            // done with the buffers - drain the composition queue first.
+            if (!DrainComposition(1000))
+            {
+                NoteIfDeviceRemoved();
+                Log("present: swapchain resize drain failed, deferring resize");
+                return false;
+            }
             ReleaseSwapBuffers();
             if (SUCCEEDED(g_swap->ResizeBuffers(0, w, h, kSwapFormat, 0)) && AcquireSwapBuffers())
             {
@@ -390,6 +508,11 @@ namespace wxl::gpu::present
         g_resetRequired.store(false, std::memory_order_relaxed);
     }
 
+    bool DeviceRemoved()
+    {
+        return g_deviceRemoved.load(std::memory_order_relaxed);
+    }
+
     bool PrepareForReset()
     {
         // A reset can arrive immediately after the last Present, before the next frame's normal fence wait.
@@ -399,14 +522,14 @@ namespace wxl::gpu::present
         {
             // 1000 ms: a healthy queue drains in single-digit ms; a GPU that needs longer is stuck,
             // and the engine's DEVICELOST retry loop would compound a 5 s cap into multi-second hangs.
-            if (FAILED(g_fence->SetEventOnCompletion(g_fenceVal, g_event)) ||
-                WaitForSingleObject(g_event, 1000) != WAIT_OBJECT_0)
+            // WaitFence revalidates the fence on every wake and retires the shared event on timeout,
+            // so an abandoned registration here can never poison the per-frame waits later.
+            if (!WaitFence(g_fenceVal, 1000))
             {
-                ID3D12Device* device = wxl::gpu::Device();
-                const HRESULT reason = device ? device->GetDeviceRemovedReason() : E_FAIL;
-                Log("present: reset drain timed out fence=%llu/%llu removedReason=0x%08lX",
+                NoteIfDeviceRemoved();
+                Log("present: reset drain timed out fence=%llu/%llu",
                     (unsigned long long)g_fence->GetCompletedValue(),
-                    (unsigned long long)g_fenceVal, (unsigned long)reason);
+                    (unsigned long long)g_fenceVal);
                 return false;
             }
         }
@@ -429,6 +552,10 @@ namespace wxl::gpu::present
             if (trace) Log("present: rejected null device=%p window=%p", device, window);
             return false;
         }
+        // A removed device can never composite again: bail before touching On12 so the capture
+        // hook reports DEVICELOST to the engine (native recovery) instead of piling up errors.
+        if (g_deviceRemoved.load(std::memory_order_relaxed))
+            return false;
         // Minimized: nothing is visible and the composition swapchain retains its last frame, so
         // skip the whole blit/submit machinery instead of pushing frames into an occluded chain.
         // Returning true tells the capture hook the present is handled (native present stays off).
@@ -518,10 +645,18 @@ namespace wxl::gpu::present
 
         const UINT frameSlot = g_frameHead++ % kFrameRing;
         const UINT64 reusableAt = g_frameFence[frameSlot];
-        if (g_fence->GetCompletedValue() < reusableAt)
+        // Bounded, stale-signal-immune wait (was a single-shot INFINITE wait: a latched stale
+        // signal let it pop one fence early, Resetting this slot's allocator while its list was
+        // still executing - the DEVICE_HUNG producer). A GPU >2s behind a 3-frame ring is stuck;
+        // drop the frame and let the recovery path decide.
+        if (!WaitFence(reusableAt, 2000))
         {
-            g_fence->SetEventOnCompletion(reusableAt, g_event);
-            WaitForSingleObject(g_event, INFINITE);
+            NoteIfDeviceRemoved();
+            if (trace) Log("present: frame-slot fence wait failed (slot=%u at=%llu)",
+                           frameSlot, (unsigned long long)reusableAt);
+            g_on12->ReturnUnderlyingResource(surf, 0, nullptr, nullptr);
+            bb12->Release(); surf->Release();
+            return false;
         }
 
         const UINT idx = g_swap->GetCurrentBackBufferIndex();
@@ -595,13 +730,24 @@ namespace wxl::gpu::present
         g_queue->Signal(g_fence, g_fenceVal);
         g_frameFence[frameSlot] = g_fenceVal;
 
-        const HRESULT returnHr = g_on12->ReturnUnderlyingResource(surf, 1, &g_fenceVal, &g_fence);
+        HRESULT returnHr = g_on12->ReturnUnderlyingResource(surf, 1, &g_fenceVal, &g_fence);
+        if (FAILED(returnHr))
+        {
+            // The surface must NOT stay checked out: unwrapping it again next frame while it is
+            // still checked out is outside the On12 contract. Our blit was fenced at g_fenceVal
+            // just above, so drain to it and hand the surface back without fences once.
+            WaitFence(g_fenceVal, 1000);
+            returnHr = g_on12->ReturnUnderlyingResource(surf, 0, nullptr, nullptr);
+            Log("present: fenced ReturnUnderlyingResource failed, drained retry hr=0x%08lX",
+                (unsigned long)returnHr);
+        }
         const HRESULT presentHr = g_swap->Present(0, 0);
         if (FAILED(returnHr) || FAILED(presentHr))
         {
             // A persistently failing present (e.g. device removed) would otherwise log — and query
             // the driver — every frame; sample the first few then one in 600 like the capture miss log.
             g_resetRequired.store(true, std::memory_order_relaxed); // recovery Reset must run natively
+            NoteIfDeviceRemoved();
             static UINT submitFails = 0;
             ++submitFails;
             if (trace || submitFails <= 4 || (submitFails % 600) == 0)

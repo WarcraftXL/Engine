@@ -92,6 +92,24 @@ namespace
         if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dbg)))) { dbg->EnableDebugLayer(); dbg->Release(); }
 #endif
 
+        // DRED (Device Removed Extended Data), opt-in via WXL_DRED=1: breadcrumb + pagefault capture.
+        // Unlike the debug layer it needs no Graphics Tools install and costs little; after a
+        // DEVICE_HUNG/REMOVED, DumpDred() names the exact command that killed the device. Must be
+        // enabled BEFORE the device is created.
+        if (wxl::config::Env("WXL_DRED", false))
+        {
+            ID3D12DeviceRemovedExtendedDataSettings* dred = nullptr;
+            if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dred))))
+            {
+                dred->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+                dred->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+                dred->Release();
+                wxl::gpu::Log("d3d9proxy: DRED enabled (auto-breadcrumbs + pagefault capture)");
+            }
+            else
+                wxl::gpu::Log("d3d9proxy: WXL_DRED=1 but DRED settings unavailable on this OS");
+        }
+
         if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&g_device)))) return false;
 #ifdef WXL_D3D12_DEBUG
         g_device->QueryInterface(IID_PPV_ARGS(&g_infoQueue));   // null if the debug layer is absent
@@ -132,6 +150,59 @@ namespace wxl::gpu
             args.NumQueues = 1;
         }
         return args;
+    }
+
+    /**
+     * @brief Logs the DRED post-mortem after a device removal: the hanging command + fault site.
+     *
+     * A no-op unless WXL_DRED=1 enabled breadcrumbs before device creation. Each breadcrumb node is
+     * one command list; a node whose last-reached value is short of its op count is the list the
+     * GPU died in, and the ops around the stall point name the offending command. The pagefault
+     * section names the allocation written out of bounds (live or recently freed).
+     */
+    void DumpDred()
+    {
+        if (!g_device) return;
+        ID3D12DeviceRemovedExtendedData* dred = nullptr;
+        if (FAILED(g_device->QueryInterface(IID_PPV_ARGS(&dred))) || !dred)
+        {
+            Log("dred: no data (run with WXL_DRED=1 to capture breadcrumbs)");
+            return;
+        }
+        D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT bc = {};
+        if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput(&bc)))
+        {
+            UINT nodes = 0, hung = 0;
+            for (const D3D12_AUTO_BREADCRUMB_NODE* n = bc.pHeadAutoBreadcrumbNode; n; n = n->pNext)
+            {
+                ++nodes;
+                const UINT32 last = n->pLastBreadcrumbValue ? *n->pLastBreadcrumbValue : 0;
+                if (last == n->BreadcrumbCount || n->BreadcrumbCount == 0) continue;   // list completed
+                ++hung;
+                Log("dred: HUNG list '%ls' on queue '%ls': reached op %u of %u",
+                    n->pCommandListDebugNameW ? n->pCommandListDebugNameW : L"<unnamed>",
+                    n->pCommandQueueDebugNameW ? n->pCommandQueueDebugNameW : L"<unnamed>",
+                    last, n->BreadcrumbCount);
+                const UINT32 from = last > 8 ? last - 8 : 0;
+                const UINT32 to   = last + 4 < n->BreadcrumbCount ? last + 4 : n->BreadcrumbCount;
+                for (UINT32 i = from; i < to; ++i)
+                    Log("dred:   op[%u]=%d%s", i, (int)n->pCommandHistory[i],
+                        i == last ? "  <-- GPU stopped here" : "");
+            }
+            Log("dred: breadcrumbs done (%u nodes, %u incomplete)", nodes, hung);
+        }
+        D3D12_DRED_PAGE_FAULT_OUTPUT pf = {};
+        if (SUCCEEDED(dred->GetPageFaultAllocationOutput(&pf)) && pf.PageFaultVA)
+        {
+            Log("dred: pagefault VA=0x%llX", (unsigned long long)pf.PageFaultVA);
+            for (const D3D12_DRED_ALLOCATION_NODE* n = pf.pHeadExistingAllocationNode; n; n = n->pNext)
+                Log("dred:   live allocation: '%ls' type=%d",
+                    n->ObjectNameW ? n->ObjectNameW : L"<unnamed>", (int)n->AllocationType);
+            for (const D3D12_DRED_ALLOCATION_NODE* n = pf.pHeadRecentFreedAllocationNode; n; n = n->pNext)
+                Log("dred:   recently FREED allocation: '%ls' type=%d  <-- use-after-free suspect",
+                    n->ObjectNameW ? n->ObjectNameW : L"<unnamed>", (int)n->AllocationType);
+        }
+        dred->Release();
     }
 
     /** @brief Drains the D3D12 debug layer's stored validation messages to the log, a no-op if absent. */

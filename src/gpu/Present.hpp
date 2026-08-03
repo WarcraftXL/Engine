@@ -59,4 +59,13 @@ namespace wxl::gpu::present
 
     /** @brief Records that a real native Reset ran; clears the ResetRequired latch. */
     void MarkRealReset();
+
+    /**
+     * @brief True once the shared D3D12 device reported removed (composition permanently down).
+     *
+     * The capture hook then reports DEVICELOST to the engine instead of suppressing its native
+     * present: the engine's own lost-device loop is the recovery path, never a frozen frame.
+     * @return true when the device is removed.
+     */
+    bool DeviceRemoved();
 }
