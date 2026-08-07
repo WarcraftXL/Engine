@@ -1,0 +1,82 @@
+{
+  "manifest": 1,
+  "kind": "core",
+
+  "core": {
+    "version": "1.1.0",
+    "abi": "1.1",
+    "requires_hub": ">=0.1.0",
+    "client": {
+      "version": "3.3.5a",
+      "build": 12340,
+      "arch": "x86"
+    },
+    "release": {
+      "tag": "v1.1.0",
+      "asset": "WarcraftXL-{version}-x86.zip"
+    }
+  },
+
+  "listing": {
+    "title": "WarcraftXL",
+    "tagline": "Teaches the 3.3.5a client to read modern assets natively, without converting anything.",
+    "description": "README.md",
+    "accent": "#d4a24c"
+  },
+
+  "news": [
+    {
+      "id": "v1-1-sdk",
+      "kind": "release",
+      "tag": "v1.1",
+      "title": "WarcraftXL 1.1, the SDK release",
+      "date": "2026-08-05",
+      "body": "The core is now a pure SDK. Everything that used to be built in ships as a module, boot patches are declarative data, and the client on its own changes nothing until you install something.",
+      "image": "https://bnetcmsus-a.akamaihd.net/cms/blog_header/7t/7TRTKV368HRY1785353626933.jpg",
+      "cta": { "label": "Read the release notes", "href": "https://github.com/WarcraftXL/wxl-core/releases" },
+      "featured": true
+    },
+    {
+      "id": "hub-open",
+      "kind": "announcement",
+      "title": "The hub is open for authors",
+      "date": "2026-08-07",
+      "body": "Tag your repository wxl-modules, commit a wxl.json at its root, and it appears in the store. There is no account to create and nothing to submit.",
+      "cta": { "label": "Manifest reference", "href": "https://github.com/WarcraftXL/wxl-modern-json" }
+    },
+    {
+      "id": "abi-11-frozen",
+      "kind": "note",
+      "title": "ABI 1.1 is frozen",
+      "date": "2026-07-28",
+      "body": "Hook ordering is final. Modules built against 1.0 need a rebuild before the hub will deploy them."
+    },
+    {
+      "id": "host-retired",
+      "kind": "warning",
+      "title": "The asset host is being retired",
+      "date": "2026-07-24",
+      "body": "WarcraftXLHost.exe is no longer part of the shipped set. Modules that relied on it should move their work into the injected library.",
+      "expires": "2026-12-31"
+    }
+  ],
+
+  "support": {
+    "headline": "Every expansion since Wrath, on a client from 2010.",
+    "body": "The core, the hub and every official module are free and open source, and they stay that way. Sponsorship buys client licences, build machines and the hours that go into reverse engineering. Code, manifests and reproducible bug reports count just as much.",
+    "sponsor": "https://github.com/sponsors/WarcraftXL",
+    "repo": "https://github.com/WarcraftXL/wxl-core",
+    "discord": "https://discord.gg/VMQajSc38E",
+    "image": "https://bnetcmsus-a.akamaihd.net/cms/blog_header/k1/K1OYIYFKVJRO1771607009021.jpg"
+  },
+
+  "links": {
+    "docs": "https://github.com/WarcraftXL/wxl-core/tree/main/docs",
+    "issues": "https://github.com/WarcraftXL/wxl-core/issues",
+    "modules": "https://github.com/topics/wxl-modules",
+    "hub": "https://github.com/WarcraftXL/wxl-hub"
+  },
+
+  "license": "GPL-3.0-or-later",
+  "signature": null
+}
