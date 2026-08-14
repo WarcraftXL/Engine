@@ -47,16 +47,22 @@ namespace wxl::offsets::engine::lua
     using LuaPushBooleanFn = void(__cdecl*)(void* state, int value);
 
     constexpr uintptr_t kFrameScriptExecute = 0x00819210;
-    // Executes a chunk in the active FrameScript context. The client supplies the state internally;
-    // the second and third arguments identify the diagnostic chunk and taint owner.
+    // Loads and runs a chunk. The state is NOT a parameter: the entry takes it from the engine's own
+    // global. chunkName is what the chunk is called in an error message; taintName is the owner
+    // recorded for the duration of the call, which is what makes a chunk run trusted or not.
     using FrameScriptExecuteFn = void(__cdecl*)(
         const char* source, const char* chunkName, const char* taintName);
 
-    // Registers a native engine CVar. The final flag archives the value to Config.wtf.
+    // Registers a console variable, or re-registers an existing one with a new default.
     constexpr uintptr_t kCVarRegister = 0x00767FC0;
+    // codeRegistered separates a variable declared by code from one restored out of the saved
+    // configuration; archive is what puts it back in that file when the client exits.
     using CVarRegisterFn = void*(__cdecl*)(const char* name, const char* description,
         uint32_t flags, const char* defaultValue, void* callback, uint32_t category,
         int codeRegistered, uint32_t userData, int archive);
+
+    /// Console category a variable registered by us is filed under.
+    constexpr uint32_t kCVarCategoryDefault = 4;
 
     // Verifies that an indirect callback lies in Wow.exe's .text section before Lua invokes it.
     constexpr uintptr_t kValidateFunctionPointer = 0x0086B5A0;
