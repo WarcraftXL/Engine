@@ -51,22 +51,39 @@ namespace wxl::game::script
     /// Its signature, for a detour and the matching trampoline.
     using ValidateCallbackFn = off::ValidateFunctionPointerFn;
 
-    /** Returns the active FrameScript state, or null before Lua initialization. */
+    /**
+     * @brief Reads the live script state.
+     * @return The state, or null before the script engine has been brought up.
+     */
     inline void* CurrentState()
     { return Native<off::FrameScriptGetContextFn>(off::kFrameScriptGetContext)(); }
 
-    /** Executes a chunk in the active FrameScript context. */
-    inline void Execute(const char* source, const char* chunkName, const char* taintName)
+    /**
+     * @brief Loads and runs a chunk on the live state.
+     * @param source     Chunk text.
+     * @param chunkName  What the chunk is called if it raises an error.
+     * @param taintName  Owner recorded for the duration of the call; null runs it as the engine's own.
+     */
+    inline void Execute(const char* source, const char* chunkName, const char* taintName = nullptr)
     {
-        Native<off::FrameScriptExecuteFn>(off::kFrameScriptExecute)(
-            source, chunkName, taintName);
+        Native<off::FrameScriptExecuteFn>(off::kFrameScriptExecute)(source, chunkName, taintName);
     }
 
-    /** Registers a native, optionally archived client CVar. */
+    /**
+     * @brief Declares a console variable, so a setting survives the script state being rebuilt.
+     * @param name          Variable name, as the console and the script side see it.
+     * @param defaultValue  Value it takes the first time it is declared.
+     * @param archive       Whether the value is written back to the saved configuration on exit.
+     * @return The variable, or null if @p name or @p defaultValue was empty.
+     */
     inline void* RegisterCVar(const char* name, const char* defaultValue, bool archive = true)
     {
+        constexpr uint32_t kNoFlags = 0;
+        constexpr int      kDeclaredByCode = 1;
+        constexpr uint32_t kNoUserData = 0;
         return Native<off::CVarRegisterFn>(off::kCVarRegister)(
-            name, nullptr, 0, defaultValue, nullptr, 4, 1, 0, archive ? 1 : 0);
+            name, nullptr, kNoFlags, defaultValue, nullptr, off::kCVarCategoryDefault,
+            kDeclaredByCode, kNoUserData, archive ? 1 : 0);
     }
 
     /**
