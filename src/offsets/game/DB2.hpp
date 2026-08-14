@@ -23,13 +23,35 @@
 // each replaced table. Modules never include this; they use wxl::game / wxl::events.
 namespace wxl::offsets::game::db2
 {
-    // Generic client-table row accessor used by AnimationData's fallback chain.
+    // Generic row accessor shared by the client's data tables: yields the record for an id, or null
+    // when the table carries no such row. ecx = the table's storage object.
     constexpr uintptr_t kClientDbGetRow = 0x0065C290;
     using ClientDbGetRowFn = void*(__thiscall*)(void* storage, uint32_t id);
 
+    // Animation table: what an animation id means, and what to play instead when a model lacks it.
     namespace animationdata
     {
         constexpr uintptr_t kStorageObject = 0x00AD30C8;
+
+        // Last id the stock table defines. The native fallback walker stops here, so an id above it
+        // reaches no row even when the model itself carries the sequence.
+        constexpr uint32_t kLastStockId = 506;
+
+#pragma pack(push, 1)
+        /** @brief One animation row: its identity, its classification bits, and its fallback id. */
+        struct Row
+        {
+            uint32_t    id;
+            const char* name;
+            uint32_t    weaponFlags;
+            uint32_t    bodyFlags;
+            uint32_t    flags;
+            uint32_t    fallback;      // id to play instead when the model lacks this one (0 = none)
+            uint32_t    behaviorId;
+            uint32_t    behaviorTier;
+        };
+#pragma pack(pop)
+        static_assert(sizeof(Row) == 32, "AnimationData row stride");
     }
 
     // Item DBC. Several hot consumers read this ID table inline instead of calling the generic accessor.
