@@ -708,10 +708,6 @@ namespace wxl::offsets::game::m2
     constexpr size_t kOffInstAttachSlot     = 0x54;  // uint32: attachment index this instance hangs on (0xFFFF = none)
     constexpr size_t kOffInstAttachedHead   = 0x58;  // -> first attached child instance
     constexpr size_t kOffInstAttachedNext   = 0x60;  // -> next sibling in the parent's attached-child list
-    // The high-level model wrapper reaches shared data through +0x2C, then parsed M2 data through
-    // shared+0x150. These fields belong to the playable-animation path rather than render instances.
-    constexpr size_t kOffPlayableModelShared = 0x2C;
-    constexpr size_t kOffPlayableSharedData  = 0x150;
     constexpr size_t kOffInstFreezeAnchor   = 0x64;  // uint32: nonzero arms externally driven pose freezing
     constexpr size_t kOffInstViewDistSq     = 0x88;  // float: squared view-space distance (also the draw sort key)
     constexpr size_t kOffInstConstTrackGate = 0x90;  // uint32: once-only constant-track sampling gate
