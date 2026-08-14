@@ -33,9 +33,11 @@ namespace wxl::offsets::game::db2
     {
         constexpr uintptr_t kStorageObject = 0x00AD30C8;
 
-        // Last id the stock table defines. The native fallback walker stops here, so an id above it
-        // reaches no row even when the model itself carries the sequence.
-        constexpr uint32_t kLastStockId = 506;
+        // Highest id the native resolver accepts. Its fallback walk marks visited ids in a
+        // stack-allocated array indexed by the id itself, so the bound is that buffer's size rather
+        // than anything about the table: an id above it is refused before the walk starts, even when
+        // the model carries the sequence. Never hand the native entries an id past this.
+        constexpr uint32_t kLastStockId = 505;
 
 #pragma pack(push, 1)
         /** @brief One animation row: its identity, its classification bits, and its fallback id. */
