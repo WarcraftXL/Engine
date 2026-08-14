@@ -62,6 +62,9 @@ namespace wxl::offsets::game::unit
     constexpr size_t kUnitModelField    = 0xB4;  // unit object -> body model
     constexpr size_t kModelParentField  = 0x48;  // model -> parent model (0 = root)
     constexpr size_t kUnitPositionField = 0x798; // unit object -> world position (3 floats x, y, z)
+    constexpr size_t kUnitFacingField   = 0x7A8; // float: heading, radians, counter-clockwise from +x
+    constexpr size_t kUnitPitchField    = 0x7AC; // float: pitch, radians, positive nose-up
+    constexpr size_t kUnitMoveFlagsField= 0x7CC; // uint32: the movement-state bits the server mirrors
     constexpr size_t kObjectHeaderField = 0x08;  // any object -> header carrying its GUID and type mask
     constexpr size_t kHeaderGuidField   = 0x00;  // header -> GUID
     constexpr size_t kHeaderTypeField   = 0x08;  // header -> type mask; what kGetObjectByGuid filters on
@@ -100,16 +103,24 @@ namespace wxl::offsets::game::unit
     // with every member offset checked against a constant at compile time (a wrong padding fails the build).
     // Only known fields are named; the gaps are explicit padding. Pointers are 4 bytes on the 32-bit client.
 #pragma pack(push, 1)
-    /** @brief Unit / world object: the body-model slot and the world position. */
+    /** @brief Unit / world object: the body-model slot, the world position, and the movement state. */
     struct UnitObject
     {
         uint8_t  _pad00[kUnitModelField];
         void*    model;            // kUnitModelField -> body model
         uint8_t  _pad01[kUnitPositionField - kUnitModelField - sizeof(void*)];
         float    position[3];      // kUnitPositionField -> world position x, y, z
+        uint8_t  _pad02[kUnitFacingField - kUnitPositionField - sizeof(float) * 3];
+        float    facing;           // kUnitFacingField
+        float    pitch;            // kUnitPitchField
+        uint8_t  _pad03[kUnitMoveFlagsField - kUnitPitchField - sizeof(float)];
+        uint32_t moveFlags;        // kUnitMoveFlagsField
     };
     static_assert(offsetof(UnitObject, model) == kUnitModelField, "UnitObject.model");
     static_assert(offsetof(UnitObject, position) == kUnitPositionField, "UnitObject.position");
+    static_assert(offsetof(UnitObject, facing) == kUnitFacingField, "UnitObject.facing");
+    static_assert(offsetof(UnitObject, pitch) == kUnitPitchField, "UnitObject.pitch");
+    static_assert(offsetof(UnitObject, moveFlags) == kUnitMoveFlagsField, "UnitObject.moveFlags");
 
     /** @brief Object header: the GUID and the type mask the object lookup filters on. */
     struct ObjectHeader
