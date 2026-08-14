@@ -1,84 +1,80 @@
-// M2 animation-resolution bindings: typed access to the Wrath client's model and AnimationData
-// fallback paths. Version-specific addresses remain in offsets; extensions consume these wrappers.
-// Copyright (C) 2026 WarcraftXL. GPLv3.
+// Animation-resolution bindings: what a model can actually play, and what to play instead.
+// Copyright (C) 2026 WarcraftXL
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 #pragma once
+
+#include <cstdint>
 
 #include "game/Binding.hpp"
 #include "offsets/game/DB2.hpp"
 #include "offsets/game/M2.hpp"
-#include "offsets/game/Unit.hpp"
 
-#include <cstdint>
-
+/**
+ * @brief Typed access to the two halves of animation resolution: the table that says what an
+ *        animation id means, and the model that says whether it can play it.
+ *
+ * The engine's own resolver stops at the last id its table defines, so an id past that never reaches
+ * a model even when the model carries the sequence. A module that wants those ids to play asks the
+ * model directly through here, and walks the table's fallbacks itself.
+ */
 namespace wxl::game::m2animation
 {
     namespace db2off = wxl::offsets::game::db2;
-    namespace m2off = wxl::offsets::game::m2;
-    namespace unitoff = wxl::offsets::game::unit;
+    namespace m2off  = wxl::offsets::game::m2;
 
-    // AnimationData row 506 is CurrentOrNone in the 3.3.5 client. IDs above it are not passed
-    // through the native fallback walker even when a modern M2 contains the requested sequence.
-    inline constexpr int kCurrentOrNone = 506;
+    /// One row of the animation table.
+    using AnimationRow = db2off::animationdata::Row;
 
-#pragma pack(push, 1)
-    struct AnimationDataRow
-    {
-        uint32_t id;
-        const char* name;
-        uint32_t weaponFlags;
-        uint32_t bodyFlags;
-        uint32_t flags;
-        uint32_t fallback;
-        uint32_t behaviorId;
-        uint32_t behaviorTier;
-    };
-#pragma pack(pop)
+    /// Last id the table defines. Anything above it is ours to resolve.
+    inline constexpr uint32_t kLastStockId = db2off::animationdata::kLastStockId;
 
-    inline void* UnitModel(void* unit) noexcept
-    {
-        return unit ? *reinterpret_cast<void**>(
-            reinterpret_cast<uintptr_t>(unit) + unitoff::kUnitModelField) : nullptr;
-    }
-
+    /**
+     * @brief Reaches the parsed model data behind a displayed model.
+     * @param model  Model as hung off a unit.
+     * @return The parsed data, or null while the model is still loading.
+     */
     inline void* ModelData(void* model) noexcept
     {
         if (!model) return nullptr;
-        const uintptr_t shared = *reinterpret_cast<uintptr_t*>(
-            reinterpret_cast<uintptr_t>(model) + m2off::kOffPlayableModelShared);
-        if (shared < 0x10000) return nullptr;
-        void* data = *reinterpret_cast<void**>(shared + m2off::kOffPlayableSharedData);
-        return reinterpret_cast<uintptr_t>(data) >= 0x10000 ? data : nullptr;
+        const auto* instance = static_cast<const m2off::M2Instance*>(model);
+        const auto* shared = reinterpret_cast<const m2off::M2Model*>(instance->model);
+        return shared ? shared->header : nullptr;
     }
 
+    /**
+     * @brief Asks the model itself whether it carries a sequence, bypassing the table's ceiling.
+     * @param model        Model as hung off a unit.
+     * @param animationId  Animation id, stock or beyond.
+     * @return Whether the model can play it.
+     */
     inline bool ModelHasSequence(void* model, uint32_t animationId) noexcept
     {
         void* data = ModelData(model);
-        if (!data) return false;
-        return Native<m2off::M2_HasSequenceByIdFn>(m2off::kM2DataHasSequenceById)(
+        return data && Native<m2off::M2_HasSequenceByIdFn>(m2off::kM2DataHasSequenceById)(
             data, animationId);
     }
 
-    /** Returns the model's authored sequence duration in milliseconds, or zero. */
-    inline uint32_t ModelSequenceDuration(void* model, uint32_t animationId) noexcept
+    /**
+     * @brief Reads one row of the animation table.
+     * @param animationId  Animation id.
+     * @return The row, or null when the table defines no such id.
+     */
+    inline const AnimationRow* Lookup(uint32_t animationId) noexcept
     {
-        void* data = ModelData(model);
-        if (!data) return 0;
-        const auto* header = static_cast<const m2off::M2FileHeader*>(data);
-        if (!header->seqCount || header->seqCount > 10000 ||
-            reinterpret_cast<uintptr_t>(header->seqPtr) < 0x10000)
-            return 0;
-
-        const auto* sequences = static_cast<const m2off::M2SequenceRec*>(header->seqPtr);
-        for (uint32_t index = 0; index < header->seqCount; ++index)
-            if (sequences[index].id == animationId)
-                return sequences[index].durationMs;
-        return 0;
-    }
-
-    inline const AnimationDataRow* Lookup(uint32_t animationId) noexcept
-    {
-        return static_cast<const AnimationDataRow*>(
+        return static_cast<const AnimationRow*>(
             Native<db2off::ClientDbGetRowFn>(db2off::kClientDbGetRow)(
                 reinterpret_cast<void*>(db2off::animationdata::kStorageObject), animationId));
     }
