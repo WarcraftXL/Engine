@@ -23,6 +23,15 @@
 // each replaced table. Modules never include this; they use wxl::game / wxl::events.
 namespace wxl::offsets::game::db2
 {
+    // Generic client-table row accessor used by AnimationData's fallback chain.
+    constexpr uintptr_t kClientDbGetRow = 0x0065C290;
+    using ClientDbGetRowFn = void*(__thiscall*)(void* storage, uint32_t id);
+
+    namespace animationdata
+    {
+        constexpr uintptr_t kStorageObject = 0x00AD30C8;
+    }
+
     // Item DBC. Several hot consumers read this ID table inline instead of calling the generic accessor.
     namespace item
     {

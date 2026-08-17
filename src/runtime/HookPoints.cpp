@@ -36,6 +36,7 @@
 #include "offsets/game/Doodad.hpp"
 #include "offsets/game/GroundEffect.hpp"
 #include "offsets/game/M2.hpp"
+#include "offsets/game/Network.hpp"
 #include "offsets/game/Unit.hpp"
 #include "offsets/game/Weather.hpp"
 #include "offsets/game/WMO.hpp"
@@ -62,6 +63,7 @@ namespace wxl::runtime::hookpoints
         namespace lua    = wxl::offsets::engine::lua;
         namespace mem    = wxl::offsets::engine::mem;
         namespace m2     = wxl::offsets::game::m2;
+        namespace net    = wxl::offsets::game::network;
         namespace shoff  = wxl::offsets::engine::shader;
         namespace sky    = wxl::offsets::engine::sky;
         namespace snd    = wxl::offsets::engine::sound;
@@ -439,6 +441,8 @@ namespace wxl::runtime::hookpoints
             { "Unit.ObjectUpdate",                         unit::kObjectUpdateHandler },
             { "Unit.ObjectDestroy",                        unit::kObjectDestroyHandler },
             { "Unit.TargetSet",                            unit::kTargetSet },
+            { "Unit.ResolveModelAnimation",                unit::kResolveModelAnimation },
+            { "Network.ProcessMessage",                    net::kProcessMessage },
 
             // --- client data tables ------------------------------------------------------------------
             { "Db2.MapLoad",                               db2::mapdef::kLoader },
@@ -491,6 +495,8 @@ namespace wxl::runtime::hookpoints
             { "M2.CharModelSlotClear",                     m2::kCharModelSlotClear },
             { "M2.ModelLightingCallback",                  m2::kModelLightingCallback },
             { "M2.PerFrameUpdate",                         m2::kM2PerFrameUpdate },
+            { "M2.HasPlayableAnimation",                   m2::kModelHasPlayableAnimation },
+            { "M2.FindPlayableAnimation",                  m2::kModelFindPlayableAnimation },
             { "M2.CacheBeginThread",                       m2::kCacheBeginThread },
             { "M2.CacheWaitThread",                        m2::kCacheWaitThread },
             { "M2.TrackEvalVec3",                          m2::kTrackEvalVec3 },

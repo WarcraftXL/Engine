@@ -681,6 +681,11 @@ namespace wxl::offsets::game::m2
     // Per-render-ctx per-frame update: fires once per visible M2 instance per frame, recursively
     // through the scene graph. Hooked to drive bone-matrix copy and geoset filtering.
     constexpr uintptr_t kM2PerFrameUpdate      = 0x00828A00;
+    // Playable-sequence queries. Modern models may carry valid sequence IDs above Wrath's stock
+    // AnimationData ceiling, so extensions need the native model queries as public hook targets.
+    constexpr uintptr_t kM2DataHasSequenceById      = 0x00825E00;
+    constexpr uintptr_t kModelHasPlayableAnimation  = 0x00826050;
+    constexpr uintptr_t kModelFindPlayableAnimation = 0x00825F40;
     // CharModel equip-slot handler (cmo, modelSlot, itemDataPtr, postFlag): dispatches an item to
     // an internal model slot, building paths and loading the M2.
     constexpr uintptr_t kCharModelSlotDispatch = 0x004F2640;
@@ -713,6 +718,10 @@ namespace wxl::offsets::game::m2
     constexpr size_t kOffInstAttachSlot     = 0x54;  // uint32: attachment index this instance hangs on (0xFFFF = none)
     constexpr size_t kOffInstAttachedHead   = 0x58;  // -> first attached child instance
     constexpr size_t kOffInstAttachedNext   = 0x60;  // -> next sibling in the parent's attached-child list
+    // The high-level model wrapper reaches shared data through +0x2C, then parsed M2 data through
+    // shared+0x150. These fields belong to the playable-animation path rather than render instances.
+    constexpr size_t kOffPlayableModelShared = 0x2C;
+    constexpr size_t kOffPlayableSharedData  = 0x150;
     constexpr size_t kOffInstFreezeAnchor   = 0x64;  // uint32: nonzero arms externally driven pose freezing
     constexpr size_t kOffInstViewDistSq     = 0x88;  // float: squared view-space distance (also the draw sort key)
     constexpr size_t kOffInstConstTrackGate = 0x90;  // uint32: once-only constant-track sampling gate
@@ -1155,13 +1164,19 @@ namespace wxl::offsets::game::m2
     static_assert(offsetof(M2Attachment, pos)  == kOffAttachPos,  "M2Attachment.pos");
     static_assert(sizeof(M2Attachment) == kAttachStride, "M2Attachment size");
 
-    /** @brief Sequence record view (stride kSeqStride): the flags word the cadence scan reads. */
+    /** @brief Sequence record view (stride kSeqStride): identity, native duration, and flags. */
     struct M2SequenceRec
     {
-        uint8_t  _pad00[kOffSeqFlags];
+        uint16_t id;
+        uint16_t variationIndex;
+        uint32_t durationMs;
+        float    moveSpeed;
         uint32_t flags;            // kOffSeqFlags (bit 0x1 = plays once, then holds)
+        uint8_t  _pad10[kSeqStride - 0x10];
     };
+    static_assert(offsetof(M2SequenceRec, durationMs) == 0x04, "M2SequenceRec.durationMs");
     static_assert(offsetof(M2SequenceRec, flags) == kOffSeqFlags, "M2SequenceRec.flags");
+    static_assert(sizeof(M2SequenceRec) == kSeqStride, "M2SequenceRec size");
 
     /** @brief Track object read by the evaluators: the timestamp and value sub-arrays (count + ptr each). */
     struct M2Track
@@ -1311,6 +1326,7 @@ namespace wxl::offsets::game::m2
         uint32_t drawIndex, void* skinSection, void* previousSection);
     // SlotDispatch(cmo, edx, modelSlot, itemDataPtr, postFlag): equip-slot handler; loads the model.
     using M2_SlotDispatchFn     = void (__fastcall*)(void* cmo, void* edx, uint32_t modelSlot, void* itemDataPtr, uint32_t postFlag);
+    using M2_HasSequenceByIdFn  = bool (__stdcall*)(void* modelData, uint32_t animationId);
     // SlotClear(cmo, edx, equipSlotWow): clears a WoW equipment slot on the CMO.
     using M2_SlotClearFn        = void (__fastcall*)(void* cmo, void* edx, uint32_t equipSlotWow);
 

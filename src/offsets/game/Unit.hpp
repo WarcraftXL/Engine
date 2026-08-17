@@ -37,6 +37,8 @@ namespace wxl::offsets::game::unit
     constexpr uintptr_t kActivePlayerGuid = 0x004D3790;
     // Reaction of self toward other (this-in-ECX): 0..1 hostile, 2..3 neutral, 4+ friendly.
     constexpr uintptr_t kUnitReaction = 0x007251C0;
+    // Resolves an AnimationData id against the unit's currently displayed M2 model.
+    constexpr uintptr_t kResolveModelAnimation = 0x007176F0;
 
     // --- object lifecycle (server-driven) ---
     // Object update-block handler: parses a server update message, creating new objects in the object

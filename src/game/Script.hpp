@@ -51,6 +51,24 @@ namespace wxl::game::script
     /// Its signature, for a detour and the matching trampoline.
     using ValidateCallbackFn = off::ValidateFunctionPointerFn;
 
+    /** Returns the active FrameScript state, or null before Lua initialization. */
+    inline void* CurrentState()
+    { return Native<off::FrameScriptGetContextFn>(off::kFrameScriptGetContext)(); }
+
+    /** Executes a chunk in the active FrameScript context. */
+    inline void Execute(const char* source, const char* chunkName, const char* taintName)
+    {
+        Native<off::FrameScriptExecuteFn>(off::kFrameScriptExecute)(
+            source, chunkName, taintName);
+    }
+
+    /** Registers a native, optionally archived client CVar. */
+    inline void* RegisterCVar(const char* name, const char* defaultValue, bool archive = true)
+    {
+        return Native<off::CVarRegisterFn>(off::kCVarRegister)(
+            name, nullptr, 0, defaultValue, nullptr, 4, 1, 0, archive ? 1 : 0);
+    }
+
     /**
      * @brief Counts the values passed to the call.
      * @param state  Script state the call arrived on.
@@ -117,6 +135,10 @@ namespace wxl::game::script
      */
     inline void PushBoolean(void* state, bool value)
     { Native<off::LuaPushBooleanFn>(off::kLuaPushBoolean)(state, value ? 1 : 0); }
+
+    /** Pushes nil as a return value. */
+    inline void PushNil(void* state)
+    { Native<off::LuaPushNilFn>(off::kLuaPushNil)(state); }
 
     /**
      * @brief Registers a global script function.
