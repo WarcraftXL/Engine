@@ -353,6 +353,22 @@ namespace
         CommitBuffer(device, buffer);
     }
 
+    // Wide skins are noted when their index buffers are filled so the picking hook below can
+    // recognise a triangle range that was computed from a truncated 16-bit start.
+    struct WideSkinNote { const M2SkinProfile* skin; const uint16_t* indices; uint32_t indexCount; };
+    constexpr size_t kMaxWideSkins = 64;
+    WideSkinNote g_wideSkins[kMaxWideSkins] = {};
+    size_t       g_wideSkinCount = 0;
+
+    void NoteWideSkin(const M2SkinProfile* skin)
+    {
+        if (!skin || !skin->indices) return;
+        for (size_t i = 0; i < g_wideSkinCount; ++i)
+            if (g_wideSkins[i].skin == skin) { g_wideSkins[i] = { skin, skin->indices, skin->indexCount }; return; }
+        if (g_wideSkinCount < kMaxWideSkins)
+            g_wideSkins[g_wideSkinCount++] = { skin, skin->indices, skin->indexCount };
+    }
+
     uint32_t __fastcall hkSetModelIndices(void* instance, void* edx)
     {
         void* model = instance ? *At<void*>(instance, off::kOffInstModel) : nullptr;
@@ -363,6 +379,7 @@ namespace
 
         const uint32_t result = g_origSetModelIndices(instance, edx);
         if (!result || !rebuilding || !UsesWideStarts(skin)) return result;
+        NoteWideSkin(skin);
         RefillInstanceIndices(instance, *skin, UsesGlobalIndices(model));
         return result;
     }
@@ -375,6 +392,7 @@ namespace
         // The original owns creating the pool/buffer pair and sizing it, so it always runs first.
         const uint32_t result = g_origSharedSetIndices(model, edx);
         if (!result || !rebuilding || !UsesWideStarts(skin)) return result;
+        NoteWideSkin(skin);
         RefillSharedIndices(model, *skin, UsesGlobalIndices(model));
         return result;
     }
@@ -489,6 +507,46 @@ namespace
         if (streamOffset) *streamOffset = savedOffset;
     }
 
+    // ---- picking: the scene's ray-versus-geometry pass hands the triangle test a [begin, end) pair it
+    // computed from the submesh's 16-bit start, so a widened submesh is tested 65536 indices too early
+    // and the test walks off its scratch window (crash at 0x0081D569 on a 44k-triangle model, 2026-09-07).
+    // Every wide skin is noted when its index buffer is filled; a pair that lands inside a noted skin's
+    // triangle array and matches a submesh's low-16 start and count is remapped to the widened start.
+    off::M2_SceneTriangleHitTestFn g_origTriangleHitTest = nullptr;
+
+    int __fastcall hkSceneTriangleHitTest(void* scratch, void* edx, uint16_t* indexBegin, uint16_t* indexEnd,
+                                          int vertexBase, float* point, int mode, int candidate,
+                                          float* bestDepth, int currentHit)
+    {
+        if (indexBegin && indexEnd > indexBegin)
+        {
+            for (size_t i = 0; i < g_wideSkinCount; ++i)
+            {
+                const WideSkinNote& n = g_wideSkins[i];
+                if (indexBegin < n.indices || indexBegin >= n.indices + n.indexCount) continue;
+                const M2SkinProfile& skin = *n.skin;
+                if (skin.indices != n.indices || skin.indexCount != n.indexCount || !skin.submeshes) break;
+                const uint32_t low   = static_cast<uint32_t>(indexBegin - n.indices);
+                const uint32_t count = static_cast<uint32_t>(indexEnd - indexBegin);
+                if (low > 0xFFFFu) break;      // already a full address: not a truncated one
+                for (uint32_t k = 0; k < skin.submeshCount; ++k)
+                {
+                    const M2SkinSection& sec = skin.submeshes[k];
+                    if (sec.indexStart != low || sec.indexCount != count) continue;
+                    const uint32_t wide = TriangleStart(sec, skin);
+                    if (wide != sec.indexStart)
+                    {
+                        indexBegin = const_cast<uint16_t*>(n.indices) + wide;
+                        indexEnd   = indexBegin + count;
+                    }
+                    break;
+                }
+                break;
+            }
+        }
+        return g_origTriangleHitTest(scratch, edx, indexBegin, indexEnd, vertexBase, point, mode, candidate, bestDepth, currentHit);
+    }
+
     uint32_t __fastcall hkSharedSetVertices(void* model, void* edx, int texCoordSet)
     {
         auto* skin = model ? *At<M2SkinProfile*>(model, off::kOffModelSkin) : nullptr;
@@ -517,6 +575,9 @@ namespace
             return false;
         if (!wxl::hook::Install("M2SharedSetVertices", off::kSharedSetVertices,
                                 &hkSharedSetVertices, &g_origSharedSetVertices))
+            return false;
+        if (!wxl::hook::Install("M2SceneTriangleHitTest", off::kSceneTriangleHitTest,
+                                &hkSceneTriangleHitTest, &g_origTriangleHitTest))
             return false;
         WLOG_INFO("m2native-indices: submesh triangle starts read and drawn as "
                   "(level << 16) | indexStart; a model past a 16-bit vertex address is filled and "
